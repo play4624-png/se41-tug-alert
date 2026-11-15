@@ -1,4 +1,5 @@
 {
+  "monitored_tug": "서41",
   "days": {
     "20261116": {
       "WOO HYEON|2026/11/16 04:00|WA-A|NCP-2|#1": {
@@ -1074,5 +1075,5 @@
     }
   },
   "keyboard_ready": true,
-  "telegram_offset": 103207706
+  "telegram_offset": 103207707
 }
