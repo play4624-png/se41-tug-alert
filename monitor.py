@@ -1,3 +1,4 @@
+Python
 
 import json
 import os
@@ -19,9 +20,14 @@ FIELDS = [
     '선박명', '총톤수', '흘수', '요청일시',
     '시작점', '종료점', 'Work', 'B', 'B/T', '배정예선'
 ]
-CHANGE_FIELDS = ['요청일시', '시작점', '종료점', 'Work', 'B', 'B/T']
+CHANGE_FIELDS = [
+    '요청일시', '시작점', '종료점',
+    'Work', 'B', 'B/T'
+]
 
-TUG = re.compile(r'(?<![가-힣A-Za-z0-9])서\s*41(?![가-힣A-Za-z0-9])')
+TUG = re.compile(
+    r'(?<![가-힣A-Za-z0-9])서\s*41(?![가-힣A-Za-z0-9])'
+)
 
 COMMANDS = {
     '📋 오늘배정': 'today',
@@ -47,6 +53,7 @@ KEYBOARD = {
 def parse_rows(html, day):
     soup = BeautifulSoup(html, 'html.parser')
     table = soup.select_one('table.wover_table')
+
     if table is None:
         raise RuntimeError('배정표를 찾지 못했습니다.')
 
@@ -54,22 +61,31 @@ def parse_rows(html, day):
         x.get_text(' ', strip=True)
         for x in table.select('thead th')
     ]
+
     if not all(x in headings for x in FIELDS):
-        raise RuntimeError(f'배정표 열 구성이 변경되었습니다: {headings}')
+        raise RuntimeError(
+            f'배정표 열 구성이 변경되었습니다: {headings}'
+        )
 
     grouped = defaultdict(list)
+
     for tr in table.select('tbody tr'):
         cells = [
             x.get_text(' ', strip=True)
-            for x in tr.find_all('td', recursive=False)
+            for x in tr.find_all(
+                'td', recursive=False
+            )
         ]
+
         if len(cells) != len(headings):
             continue
 
         row = dict(zip(headings, cells))
+
         try:
             req = datetime.strptime(
-                row['요청일시'], '%Y/%m/%d %H:%M'
+                row['요청일시'],
+                '%Y/%m/%d %H:%M'
             )
         except ValueError:
             continue
@@ -77,22 +93,32 @@ def parse_rows(html, day):
         if req.strftime('%Y%m%d') != day:
             continue
 
-        row = {k: row.get(k, '') for k in FIELDS}
+        row = {
+            k: row.get(k, '')
+            for k in FIELDS
+        }
+
         key = '|'.join(
             row[k] for k in [
-                '선박명', '요청일시', '시작점', '종료점'
+                '선박명', '요청일시',
+                '시작점', '종료점'
             ]
         )
+
         grouped[key].append(row)
 
     rows = {}
+
     for key, entries in grouped.items():
         ordered = sorted(
             entries,
             key=lambda r: json.dumps(
-                r, ensure_ascii=False, sort_keys=True
+                r,
+                ensure_ascii=False,
+                sort_keys=True
             )
         )
+
         for i, row in enumerate(ordered):
             rows[f'{key}|#{i+1}'] = row
 
@@ -101,6 +127,7 @@ def parse_rows(html, day):
             f'{day}: 해당 날짜의 행이 없습니다. '
             '오탐 방지를 위해 중단합니다.'
         )
+
     return rows
 
 
@@ -119,18 +146,24 @@ def fetch_rows(day):
         },
         timeout=30
     )
+
     response.raise_for_status()
+
     detected = response.apparent_encoding
+
     response.encoding = (
-        detected if detected.lower() != 'ascii'
+        detected
+        if detected.lower() != 'ascii'
         else 'utf-8'
     )
+
     return parse_rows(response.text, day)
 
 
 def tug_names(row):
     if not row:
         return []
+
     return [
         re.sub(r'\s+', '', x)
         for x in re.split(
@@ -143,21 +176,26 @@ def tug_names(row):
 
 def assigned(row):
     return bool(
-        row and TUG.search(row.get('배정예선', ''))
+        row and TUG.search(
+            row.get('배정예선', '')
+        )
     )
 
 
 def request_time(row):
     try:
         return datetime.strptime(
-            row['요청일시'], '%Y/%m/%d %H:%M'
+            row['요청일시'],
+            '%Y/%m/%d %H:%M'
         ).replace(tzinfo=KST)
+
     except (KeyError, ValueError):
         return None
 
 
 def eligible(row, now):
     req = request_time(row)
+
     return bool(
         req
         and now.date() <= req.date()
@@ -167,7 +205,9 @@ def eligible(row, now):
 
 
 def ship(row):
-    return ' '.join(row['선박명'].upper().split())
+    return ' '.join(
+        row['선박명'].upper().split()
+    )
 
 
 def match_rows(old_rows, new_rows):
@@ -189,14 +229,17 @@ def match_rows(old_rows, new_rows):
 
     for k, row in old_remaining.items():
         old_groups[identity(row)].append(k)
+
     for k, row in new_remaining.items():
         new_groups[identity(row)].append(k)
 
     for ident in old_groups.keys() & new_groups.keys():
         oks = old_groups[ident]
         nks = new_groups[ident]
+
         if len(oks) == len(nks) == 1:
             ok, nk = oks[0], nks[0]
+
             pairs.append((
                 old_remaining.pop(ok),
                 new_remaining.pop(nk)
@@ -207,6 +250,7 @@ def match_rows(old_rows, new_rows):
 
     for k, row in old_remaining.items():
         old_names[ship(row)].append(k)
+
     for k, row in new_remaining.items():
         new_names[ship(row)].append(k)
 
@@ -219,16 +263,19 @@ def match_rows(old_rows, new_rows):
                 old_remaining.pop(oks[0]),
                 new_remaining.pop(nks[0])
             ))
+
         elif not oks:
             pairs.extend(
                 (None, new_remaining.pop(k))
                 for k in nks
             )
+
         elif not nks:
             pairs.extend(
                 (old_remaining.pop(k), None)
                 for k in oks
             )
+
         else:
             print(
                 f'주의: {name} 동일 선박 복수 작업 '
@@ -238,28 +285,29 @@ def match_rows(old_rows, new_rows):
     return pairs
 
 
+# 변경된 부분:
+# 변경 전후의 배정예선 전체 목록 표시
+# 빈칸에서 신규배정된 경우 변경 문구 생략
 def tug_changes(old, new):
-    before = Counter(tug_names(old))
-    after = Counter(tug_names(new))
-    removed = list((before - after).elements())
-    added = list((after - before).elements())
+    before = tug_names(old)
+    after = tug_names(new)
 
-    if not removed and not added:
+    if Counter(before) == Counter(after):
         return None
 
-    if len(removed) == len(added) == 1:
-        return (
-            f'🔄 예선 변경: '
-            f'{removed[0]} → {added[0]}'
-        )
+    if not before:
+        return None
 
-    parts = []
-    if removed:
-        parts.append('제외 ' + ', '.join(removed))
-    if added:
-        parts.append('추가 ' + ', '.join(added))
+    before_text = ', '.join(before)
+    after_text = (
+        ', '.join(after)
+        if after else '미배정'
+    )
 
-    return '🔄 예선 변경: ' + ' / '.join(parts)
+    return (
+        f'🔄 예선 변경: '
+        f'{before_text} → {after_text}'
+    )
 
 
 def describe(row):
@@ -277,8 +325,14 @@ def describe(row):
     )
 
 
-def telegram_send(token, chat_id, text, keyboard=False):
-    data = {'chat_id': chat_id, 'text': text}
+def telegram_send(
+    token, chat_id, text, keyboard=False
+):
+    data = {
+        'chat_id': chat_id,
+        'text': text
+    }
+
     if keyboard:
         data['reply_markup'] = KEYBOARD
 
@@ -287,12 +341,19 @@ def telegram_send(token, chat_id, text, keyboard=False):
         json=data,
         timeout=20
     )
+
     response.raise_for_status()
+
     if not response.json().get('ok'):
-        raise RuntimeError('텔레그램 전송 실패')
+        raise RuntimeError(
+            '텔레그램 전송 실패'
+        )
 
 
-def send(token, chat_id, kind, row, old=None, new=None):
+def send(
+    token, chat_id, kind,
+    row, old=None, new=None
+):
     icon = {
         '신규배정': '🟢',
         '작업변경': '🔵',
@@ -318,6 +379,7 @@ def send(token, chat_id, kind, row, old=None, new=None):
                     if field == '요청일시'
                     else f'✏️ {field} 변경'
                 )
+
                 lines.append(
                     f"{label}: "
                     f"{old.get(field) or '-'} → "
@@ -325,11 +387,14 @@ def send(token, chat_id, kind, row, old=None, new=None):
                 )
 
         changes = tug_changes(old, new)
+
         if changes:
             lines.append(changes)
 
     telegram_send(
-        token, chat_id, '\n'.join(lines)
+        token,
+        chat_id,
+        '\n'.join(lines)
     )
 
 
@@ -340,6 +405,7 @@ def read_state():
     previous = json.loads(
         STATE.read_text(encoding='utf-8')
     )
+
     if not isinstance(previous, dict):
         return {}, {}, None
 
@@ -355,6 +421,7 @@ def read_state():
         previous_by_day = {}
 
     offset = previous.get('telegram_offset')
+
     if not isinstance(offset, int) or offset < 0:
         offset = None
 
@@ -365,8 +432,11 @@ def get_updates(token, offset):
     params = {
         'timeout': 0,
         'limit': 100,
-        'allowed_updates': json.dumps(['message'])
+        'allowed_updates': json.dumps(
+            ['message']
+        )
     }
+
     if offset is not None:
         params['offset'] = offset
 
@@ -375,6 +445,7 @@ def get_updates(token, offset):
         params=params,
         timeout=20
     )
+
     response.raise_for_status()
     payload = response.json()
 
@@ -386,8 +457,11 @@ def get_updates(token, offset):
     return payload.get('result', [])
 
 
-def command_reply(command, current_by_day, now):
+def command_reply(
+    command, current_by_day, now
+):
     today = now.strftime('%Y%m%d')
+
     tomorrow = (
         now + timedelta(days=1)
     ).strftime('%Y%m%d')
@@ -396,8 +470,10 @@ def command_reply(command, current_by_day, now):
 
     if mode == 'today':
         target_days = [today]
+
     elif mode == 'tomorrow':
         target_days = [tomorrow]
+
     else:
         target_days = [today, tomorrow]
 
@@ -406,12 +482,14 @@ def command_reply(command, current_by_day, now):
     for day in target_days:
         for row in current_by_day[day].values():
             req = request_time(row)
+
             if assigned(row) and req:
                 selected.append((req, row))
 
     selected.sort(
         key=lambda item: (
-            item[0], item[1]['선박명']
+            item[0],
+            item[1]['선박명']
         )
     )
 
@@ -431,65 +509,86 @@ def command_reply(command, current_by_day, now):
     if not selected:
         return [
             header +
-            '\n현재 조건에 해당하는 배정 작업이 없습니다.'
+            '\n현재 조건에 해당하는 '
+            '배정 작업이 없습니다.'
         ]
 
     messages = []
     buf = header
 
-    for index, (_, row) in enumerate(selected, 1):
-        entry = f'\n\n[{index}] {describe(row)}'
+    for index, (_, row) in enumerate(
+        selected, 1
+    ):
+        entry = (
+            f'\n\n[{index}] {describe(row)}'
+        )
 
         if len(buf) + len(entry) > 3500:
             messages.append(buf)
+
             buf = (
-                f'🚢 {TUG_NAME} {title} (계속)\n'
+                f'🚢 {TUG_NAME} {title} '
+                f'(계속)\n'
                 + entry.lstrip()
             )
         else:
             buf += entry
 
     messages.append(buf)
+
     return messages
 
 
 def process_commands(
-    token, chat_id, current_by_day, now, offset
+    token, chat_id,
+    current_by_day, now, offset
 ):
     updates = get_updates(token, offset)
     new_offset = offset
 
     for update in updates:
         update_id = update.get('update_id')
+
         if not isinstance(update_id, int):
             continue
 
         message = update.get('message') or {}
-        text = (message.get('text') or '').strip()
+        text = (
+            message.get('text') or ''
+        ).strip()
 
         if text in COMMANDS:
             command = text
+
         elif text:
             command = (
                 text.split(maxsplit=1)[0]
                 .split('@', 1)[0]
             )
+
         else:
             command = ''
 
         if (
-            str(message.get('chat', {}).get('id'))
-            == str(chat_id)
+            str(
+                message.get('chat', {}).get('id')
+            ) == str(chat_id)
             and command in COMMANDS
         ):
             for reply in command_reply(
-                command, current_by_day, now
+                command,
+                current_by_day,
+                now
             ):
                 telegram_send(
-                    token, chat_id, reply
+                    token,
+                    chat_id,
+                    reply
                 )
+
             print(
-                f'텔레그램 명령어 처리: {command}'
+                '텔레그램 명령어 처리: '
+                f'{command}'
             )
 
         new_offset = update_id + 1
@@ -497,7 +596,9 @@ def process_commands(
     return new_offset
 
 
-def save_state(days, offset, keyboard_ready=False):
+def save_state(
+    days, offset, keyboard_ready=False
+):
     payload = {
         'monitored_tug': TUG_NAME,
         'days': days,
@@ -519,6 +620,7 @@ def save_state(days, offset, keyboard_ready=False):
 
 def main():
     now = datetime.now(KST)
+
     days = [
         now.strftime('%Y%m%d'),
         (
@@ -526,12 +628,18 @@ def main():
         ).strftime('%Y%m%d')
     ]
 
-    token = os.getenv('TELEGRAM_BOT_TOKEN')
-    chat_id = os.getenv('TELEGRAM_CHAT_ID')
+    token = os.getenv(
+        'TELEGRAM_BOT_TOKEN'
+    )
+
+    chat_id = os.getenv(
+        'TELEGRAM_CHAT_ID'
+    )
 
     if not token or not chat_id:
         raise RuntimeError(
-            'GitHub Secrets에 TELEGRAM_BOT_TOKEN과 '
+            'GitHub Secrets에 '
+            'TELEGRAM_BOT_TOKEN과 '
             'TELEGRAM_CHAT_ID가 필요합니다.'
         )
 
@@ -540,17 +648,28 @@ def main():
         for day in days
     }
 
-    previous_state, previous_by_day, offset = (
-        read_state()
-    )
+    (
+        previous_state,
+        previous_by_day,
+        offset
+    ) = read_state()
 
     keyboard_ready = (
-        previous_state.get('keyboard_ready') is True
+        previous_state.get(
+            'keyboard_ready'
+        ) is True
     )
 
-    # 기존 서65 기록과 서41 기록을 비교하지 않음.
-    if previous_state.get('monitored_tug') != TUG_NAME:
-        print('서41 최초 적용: 기준 데이터 새로 저장')
+    # 기존 서65 기록과 서41 기록을 비교하지 않음
+    if (
+        previous_state.get('monitored_tug')
+        != TUG_NAME
+    ):
+        print(
+            '서41 최초 적용: '
+            '기준 데이터 새로 저장'
+        )
+
         previous_by_day = {}
 
     for day in days:
@@ -559,8 +678,8 @@ def main():
 
         if old_rows is None:
             print(
-                f'{day}: 서41 기준 데이터 최초 저장 '
-                '(알림 없음)'
+                f'{day}: 서41 기준 데이터 '
+                '최초 저장 (알림 없음)'
             )
             continue
 
@@ -571,17 +690,22 @@ def main():
             '작업취소': 0
         }
 
-        for old, new in match_rows(old_rows, current):
+        for old, new in match_rows(
+            old_rows, current
+        ):
             was = assigned(old)
             is_now = assigned(new)
             kind = None
 
             if not was and is_now:
                 kind = '신규배정'
+
             elif was and new is None:
                 kind = '작업취소'
+
             elif was and not is_now:
                 kind = '배정취소'
+
             elif (
                 was and is_now
                 and (
@@ -594,41 +718,62 @@ def main():
             ):
                 kind = '작업변경'
 
-            if kind and eligible(new or old, now):
+            if kind and eligible(
+                new or old, now
+            ):
                 send(
-                    token, chat_id, kind,
-                    new or old, old, new
+                    token,
+                    chat_id,
+                    kind,
+                    new or old,
+                    old,
+                    new
                 )
+
                 counts[kind] += 1
 
         print(
             f'{day}: 요청일시 기준 '
-            f'{len(current)}건 / 알림 {counts}'
+            f'{len(current)}건 / '
+            f'알림 {counts}'
         )
 
     save_state(
-        current_by_day, offset, keyboard_ready
+        current_by_day,
+        offset,
+        keyboard_ready
     )
 
     if not keyboard_ready:
         telegram_send(
             token,
             chat_id,
-            '🚢 서41 배정 조회 버튼이 준비됐습니다. '
+            '🚢 서41 배정 조회 버튼이 '
+            '준비됐습니다. '
             '아래 버튼을 눌러 조회하세요.',
             keyboard=True
         )
+
         keyboard_ready = True
+
         save_state(
-            current_by_day, offset, keyboard_ready
+            current_by_day,
+            offset,
+            keyboard_ready
         )
 
     new_offset = process_commands(
-        token, chat_id, current_by_day, now, offset
+        token,
+        chat_id,
+        current_by_day,
+        now,
+        offset
     )
 
     save_state(
-        current_by_day, new_offset, keyboard_ready
+        current_by_day,
+        new_offset,
+        keyboard_ready
     )
 
 
