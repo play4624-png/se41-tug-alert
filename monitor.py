@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from html import escape
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,13 +14,21 @@ URL = 'http://ystug.co.kr/sub07/sub03_01.php'
 STATE = Path('state.json')
 KST = ZoneInfo('Asia/Seoul')
 TUG_NAME = '서41'
+INLINE_MODE = False
 FIELDS = ['선박명', '총톤수', '흘수', '요청일시', '시작점', '종료점', 'Work', 'B', 'B/T', '배정예선']
 CHANGE_FIELDS = ['요청일시', '시작점', '종료점', 'Work', 'B', 'B/T']
 TUG = re.compile(r'(?<![가-힣A-Za-z0-9])서\s*41(?![가-힣A-Za-z0-9])')
+WORK_BOLD = re.compile(r'(?<![A-Za-z0-9])(?:DE|BE|SFT|WAT|ESC)(?![A-Za-z0-9])', re.IGNORECASE)
+BUTTONS = {'se65_today': 'today', 'se65_tomorrow': 'tomorrow', 'se65_all': 'all'}
 COMMANDS = {
     '📋 오늘배정': 'today', '📅 내일배정': 'tomorrow', '📑 전체배정': 'all',
     '/오늘배정': 'today', '/현재배정': 'today', '/내일배정': 'tomorrow', '/전체배정': 'all'
 }
+INLINE_KEYBOARD = {'inline_keyboard': [[
+    {'text': '📋 오늘배정', 'callback_data': 'se65_today'},
+    {'text': '📅 내일배정', 'callback_data': 'se65_tomorrow'},
+    {'text': '📑 전체배정', 'callback_data': 'se65_all'}
+]]}
 KEYBOARD = {
     'keyboard': [[{'text': '📋 오늘배정'}, {'text': '📅 내일배정'}, {'text': '📑 전체배정'}]],
     'resize_keyboard': True, 'is_persistent': True
@@ -63,12 +72,11 @@ def fetch_rows(day):
     response = requests.post(
         URL,
         data={'p_dt_req': day, 'p_txt_ship': '', 'p_nm_bizarea': '', 'p_nm_tugboat': ''},
-        headers={'User-Agent': 'Mozilla/5.0', 'Referer': URL},
-        timeout=30
+        headers={'User-Agent': 'Mozilla/5.0', 'Referer': URL}, timeout=30
     )
     response.raise_for_status()
-    detected = response.apparent_encoding
-    response.encoding = detected if detected.lower() != 'ascii' else 'utf-8'
+    encoding = response.apparent_encoding
+    response.encoding = encoding if encoding.lower() != 'ascii' else 'utf-8'
     return parse_rows(response.text, day)
 
 
@@ -85,7 +93,7 @@ def assigned(row):
 def request_time(row):
     try:
         return datetime.strptime(row['요청일시'], '%Y/%m/%d %H:%M').replace(tzinfo=KST)
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, TypeError):
         return None
 
 
@@ -107,8 +115,7 @@ def match_rows(old_rows, new_rows):
     def identity(row):
         return tuple(row.get(k, '') for k in ('선박명', '요청일시', '시작점', '종료점'))
 
-    old_groups = defaultdict(list)
-    new_groups = defaultdict(list)
+    old_groups, new_groups = defaultdict(list), defaultdict(list)
     for k, row in old_remaining.items():
         old_groups[identity(row)].append(k)
     for k, row in new_remaining.items():
@@ -118,8 +125,7 @@ def match_rows(old_rows, new_rows):
         if len(oks) == len(nks) == 1:
             pairs.append((old_remaining.pop(oks[0]), new_remaining.pop(nks[0])))
 
-    old_names = defaultdict(list)
-    new_names = defaultdict(list)
+    old_names, new_names = defaultdict(list), defaultdict(list)
     for k, row in old_remaining.items():
         old_names[ship(row)].append(k)
     for k, row in new_remaining.items():
@@ -142,47 +148,89 @@ def tug_changes(old, new):
     after = tug_names(new)
     if Counter(before) == Counter(after):
         return None
-    if not before:
+    if not before and not INLINE_MODE:
         return None
-    before_text = ', '.join(before)
+    before_text = ', '.join(before) if before else '미배정'
     after_text = ', '.join(after) if after else '미배정'
     return f'🔄 예선 변경: {before_text} → {after_text}'
 
 
-def describe(row):
+def work_html(value):
+    # Work 열에 등장하는 다섯 코드만 강조한다. 다른 열은 강조하지 않는다.
+    value = str(value)
+    parts = []
+    pos = 0
+    for match in WORK_BOLD.finditer(value):
+        parts.append(escape(value[pos:match.start()]))
+        parts.append(f'<b>{escape(match.group())}</b>')
+        pos = match.end()
+    parts.append(escape(value[pos:]))
+    return ''.join(parts)
+
+
+def describe(row, html_mode=False):
+    if not html_mode:
+        return (
+            f"{row['선박명']} | {row['총톤수']}톤 | 흘수 {row['흘수']}\n"
+            f"요청일시 {row['요청일시']}\n"
+            f"작업구간 {row['시작점']} → {row['종료점']}\n"
+            f"Work {row['Work']} | B {row['B']} | B/T {row['B/T']}\n"
+            f"배정예선 {row['배정예선']}"
+        )
+    e = escape
     return (
-        f"{row['선박명']} | {row['총톤수']}톤 | 흘수 {row['흘수']}\n"
-        f"요청일시 {row['요청일시']}\n"
-        f"작업구간 {row['시작점']} → {row['종료점']}\n"
-        f"Work {row['Work']} | B {row['B']} | B/T {row['B/T']}\n"
-        f"배정예선 {row['배정예선']}"
+        f"<b>{e(row['선박명'])}</b> | {e(row['총톤수'])}톤 | 흘수 {e(row['흘수'])}\n"
+        f"<b>요청일시</b> {e(row['요청일시'])}\n"
+        f"<b>작업구간</b> {e(row['시작점'])} → {e(row['종료점'])}\n"
+        f"Work {work_html(row['Work'])} | B {e(row['B'])} | B/T {e(row['B/T'])}\n"
+        f"<b>배정예선</b> {e(row['배정예선'])}"
     )
 
 
-def telegram_send(token, chat_id, text, keyboard=False):
+def telegram_api(token, method, data):
+    response = requests.post(f'https://api.telegram.org/bot{token}/{method}', json=data, timeout=20)
+    if not response.ok:
+        try:
+            detail = response.json().get('description', '')
+        except ValueError:
+            detail = ''
+        raise RuntimeError(f'텔레그램 {method} 실패 (HTTP {response.status_code}): {detail}')
+    payload = response.json()
+    if not payload.get('ok'):
+        raise RuntimeError(f'텔레그램 {method} 실패: {payload.get("description", "알 수 없는 오류")}')
+    return payload.get('result')
+
+
+def telegram_send(token, chat_id, text, buttons=False, html_mode=False):
     data = {'chat_id': chat_id, 'text': text}
-    if keyboard:
-        data['reply_markup'] = KEYBOARD
-    response = requests.post(f'https://api.telegram.org/bot{token}/sendMessage', json=data, timeout=20)
-    response.raise_for_status()
-    if not response.json().get('ok'):
-        raise RuntimeError('텔레그램 전송 실패')
+    if buttons:
+        data['reply_markup'] = INLINE_KEYBOARD if INLINE_MODE else KEYBOARD
+    if html_mode:
+        data['parse_mode'] = 'HTML'
+    return telegram_api(token, 'sendMessage', data)
+
+
+def answer_callback(token, callback_id):
+    return telegram_api(token, 'answerCallbackQuery', {'callback_query_id': callback_id})
 
 
 def send(token, chat_id, kind, row, old=None, new=None):
     icon = {'신규배정': '🟢', '작업변경': '🔵', '배정취소': '🟠', '작업취소': '🔴'}[kind]
-    lines = [f'{icon} [{kind}] {TUG_NAME}', describe(row)]
+    lines = [f'{icon} <b>[{kind}]</b> {TUG_NAME}', describe(row, html_mode=True)]
     if kind == '작업취소':
         lines.append('❌ 작업 자체가 배정표에서 삭제됨')
     if old and new:
         for field in CHANGE_FIELDS:
             if old.get(field, '') != new.get(field, ''):
                 label = '🕒 시간 변경' if field == '요청일시' else f'✏️ {field} 변경'
-                lines.append(f"{label}: {old.get(field) or '-'} → {new.get(field) or '-'}")
+                before = escape(old.get(field) or '-')
+                after = escape(new.get(field) or '-')
+                lines.append(f'<b>{escape(label)}:</b> {before} → {after}')
         changes = tug_changes(old, new)
-        if changes:
-            lines.append(changes)
-    telegram_send(token, chat_id, '\n'.join(lines))
+        if changes and (not INLINE_MODE or kind != '신규배정' or tug_names(old)):
+            prefix, remainder = changes.split(': ', 1)
+            lines.append(f'<b>{escape(prefix)}:</b> {escape(remainder)}')
+    telegram_send(token, chat_id, '\n'.join(lines), html_mode=True)
 
 
 def read_state():
@@ -192,7 +240,14 @@ def read_state():
     if not isinstance(previous, dict):
         return {}, {}, None
     days_data = previous.get('days')
-    previous_by_day = {day: rows for day, rows in days_data.items() if isinstance(rows, dict)} if isinstance(days_data, dict) else {}
+    if isinstance(days_data, dict):
+        previous_by_day = {day: rows for day, rows in days_data.items() if isinstance(rows, dict)}
+    elif INLINE_MODE and isinstance(previous.get('rows'), dict) and isinstance(previous.get('day'), str):
+        previous_by_day = {previous['day']: previous['rows']}
+    else:
+        previous_by_day = {}
+        if INLINE_MODE and isinstance(days_data, list):
+            print('주의: state.json의 days가 리스트입니다. 기준 데이터를 다시 저장합니다.')
     offset = previous.get('telegram_offset')
     if not isinstance(offset, int) or offset < 0:
         offset = None
@@ -200,21 +255,21 @@ def read_state():
 
 
 def get_updates(token, offset):
-    params = {'timeout': 0, 'limit': 100, 'allowed_updates': json.dumps(['message'])}
+    allowed = ['message', 'callback_query'] if INLINE_MODE else ['message']
+    params = {'timeout': 0, 'limit': 100, 'allowed_updates': json.dumps(allowed)}
     if offset is not None:
         params['offset'] = offset
     response = requests.get(f'https://api.telegram.org/bot{token}/getUpdates', params=params, timeout=20)
     response.raise_for_status()
     payload = response.json()
     if not payload.get('ok'):
-        raise RuntimeError('텔레그램 명령어 조회 실패')
+        raise RuntimeError(f'텔레그램 명령어 조회 실패: {payload.get("description", "")}')
     return payload.get('result', [])
 
 
-def command_reply(command, current_by_day, now):
+def command_reply(mode, current_by_day, now):
     today = now.strftime('%Y%m%d')
     tomorrow = (now + timedelta(days=1)).strftime('%Y%m%d')
-    mode = COMMANDS[command]
     target_days = [today] if mode == 'today' else [tomorrow] if mode == 'tomorrow' else [today, tomorrow]
     selected = []
     for day in target_days:
@@ -227,13 +282,12 @@ def command_reply(command, current_by_day, now):
     header = f'🚢 {TUG_NAME} {title}\n조회시각: {now:%Y/%m/%d %H:%M} (KST)\n총 {len(selected)}건'
     if not selected:
         return [header + '\n현재 조건에 해당하는 배정 작업이 없습니다.']
-    messages = []
-    buf = header
+    messages, buf = [], header
     for index, (_, row) in enumerate(selected, 1):
         entry = f'\n\n[{index}] {describe(row)}'
         if len(buf) + len(entry) > 3500:
             messages.append(buf)
-            buf = f'🚢 {TUG_NAME} {title} (계속)\n' + entry.lstrip()
+            buf = f'🚢 {TUG_NAME} {title} (계속)\n{entry.lstrip()}'
         else:
             buf += entry
     messages.append(buf)
@@ -243,23 +297,62 @@ def command_reply(command, current_by_day, now):
 def process_commands(token, chat_id, current_by_day, now, offset):
     updates = get_updates(token, offset)
     new_offset = offset
+    replied_modes = set()
+    new_members_joined = False
     for update in updates:
         update_id = update.get('update_id')
         if not isinstance(update_id, int):
             continue
-        message = update.get('message') or {}
-        text = (message.get('text') or '').strip()
-        command = text if text in COMMANDS else text.split(maxsplit=1)[0].split('@', 1)[0] if text else ''
-        if str(message.get('chat', {}).get('id')) == str(chat_id) and command in COMMANDS:
-            for reply in command_reply(command, current_by_day, now):
-                telegram_send(token, chat_id, reply)
-            print(f'텔레그램 명령어 처리: {command}')
+        callback = update.get('callback_query') if INLINE_MODE else None
+        if callback:
+            callback_chat = (callback.get('message') or {}).get('chat', {}).get('id')
+            mode = BUTTONS.get(callback.get('data'))
+            if str(callback_chat) == str(chat_id) and mode:
+                try:
+                    answer_callback(token, callback['id'])
+                except RuntimeError as exc:
+                    print(f'버튼 응답 확인 지연 (조회 결과는 계속 전송): {exc}')
+                if mode not in replied_modes:
+                    for reply in command_reply(mode, current_by_day, now):
+                        telegram_send(token, chat_id, reply)
+                    replied_modes.add(mode)
+                    print(f'인라인 버튼 처리: {mode}')
+                else:
+                    print(f'중복 버튼 요청 생략: {mode}')
+        else:
+            message = update.get('message') or {}
+            msg_text = (message.get('text') or '').strip()
+            command = msg_text if msg_text in COMMANDS else (
+                msg_text.split(maxsplit=1)[0].split('@', 1)[0] if msg_text else ''
+            )
+            message_chat = message.get('chat', {}).get('id')
+            if INLINE_MODE and str(message_chat) == str(chat_id) and message.get('new_chat_members'):
+                new_members_joined = True
+            if str(message_chat) == str(chat_id) and command in COMMANDS:
+                mode = COMMANDS[command]
+                if not INLINE_MODE or mode not in replied_modes:
+                    for reply in command_reply(mode, current_by_day, now):
+                        telegram_send(token, chat_id, reply)
+                    replied_modes.add(mode)
+                    print(f'텔레그램 명령어 처리: {command}')
+                else:
+                    print(f'중복 명령어 생략: {command}')
         new_offset = update_id + 1
+    if INLINE_MODE and new_members_joined:
+        telegram_send(token, chat_id,
+                      '🚢 서65 배정 조회 안내\n'
+                      '새로 입장하신 분은 아래 버튼으로 오늘·내일 배정을 확인하세요.\n'
+                      '※ 조회 결과는 다음 자동 실행 때 도착할 수 있습니다.', buttons=True)
+        print('신규 참여자 입장: 인라인 조회 버튼 안내 1회 전송')
     return new_offset
 
 
-def save_state(days, offset, keyboard_ready=False):
-    payload = {'monitored_tug': TUG_NAME, 'days': days, 'keyboard_ready': keyboard_ready}
+def save_state(days, offset, keyboard_ready=False, keyboard_chat_id=None, keyboard_mode=None):
+    if INLINE_MODE:
+        payload = {'days': days, 'keyboard_ready': keyboard_ready,
+                   'keyboard_chat_id': keyboard_chat_id, 'keyboard_mode': keyboard_mode}
+    else:
+        payload = {'monitored_tug': TUG_NAME, 'days': days, 'keyboard_ready': keyboard_ready}
     if offset is not None:
         payload['telegram_offset'] = offset
     STATE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -268,45 +361,62 @@ def save_state(days, offset, keyboard_ready=False):
 def main():
     now = datetime.now(KST)
     days = [now.strftime('%Y%m%d'), (now + timedelta(days=1)).strftime('%Y%m%d')]
-    token = os.getenv('TELEGRAM_BOT_TOKEN')
-    chat_id = os.getenv('TELEGRAM_CHAT_ID')
+    token, chat_id = os.getenv('TELEGRAM_BOT_TOKEN'), os.getenv('TELEGRAM_CHAT_ID')
     if not token or not chat_id:
         raise RuntimeError('GitHub Secrets에 TELEGRAM_BOT_TOKEN과 TELEGRAM_CHAT_ID가 필요합니다.')
     current_by_day = {day: fetch_rows(day) for day in days}
     previous_state, previous_by_day, offset = read_state()
     keyboard_ready = previous_state.get('keyboard_ready') is True
-    if previous_state.get('monitored_tug') != TUG_NAME:
+    keyboard_chat_id = previous_state.get('keyboard_chat_id')
+    keyboard_mode = previous_state.get('keyboard_mode')
+    if not INLINE_MODE and previous_state.get('monitored_tug') != TUG_NAME:
         print('서41 최초 적용: 기준 데이터 새로 저장')
         previous_by_day = {}
     for day in days:
-        current = current_by_day[day]
-        old_rows = previous_by_day.get(day)
+        current, old_rows = current_by_day[day], previous_by_day.get(day)
         if old_rows is None:
-            print(f'{day}: 서41 기준 데이터 최초 저장 (알림 없음)')
+            print(f'{day}: 기준 데이터 최초 저장 (알림 없음)')
             continue
         counts = {'신규배정': 0, '작업변경': 0, '배정취소': 0, '작업취소': 0}
         for old, new in match_rows(old_rows, current):
-            was, is_now = assigned(old), assigned(new)
-            kind = None
+            was, is_now, kind = assigned(old), assigned(new), None
             if not was and is_now:
                 kind = '신규배정'
             elif was and new is None:
                 kind = '작업취소'
             elif was and not is_now:
                 kind = '배정취소'
-            elif was and is_now and (any(old.get(k) != new.get(k) for k in CHANGE_FIELDS) or tug_changes(old, new)):
+            elif was and is_now and (
+                any(old.get(k) != new.get(k) for k in CHANGE_FIELDS) or tug_changes(old, new)
+            ):
                 kind = '작업변경'
             if kind and eligible(new or old, now):
                 send(token, chat_id, kind, new or old, old, new)
                 counts[kind] += 1
         print(f'{day}: 요청일시 기준 {len(current)}건 / 알림 {counts}')
-    save_state(current_by_day, offset, keyboard_ready)
-    if not keyboard_ready:
-        telegram_send(token, chat_id, '🚢 서41 배정 조회 버튼이 준비됐습니다. 아래 버튼을 눌러 조회하세요.', keyboard=True)
+    save_state(current_by_day, offset, keyboard_ready, keyboard_chat_id, keyboard_mode)
+    if INLINE_MODE:
+        if (not keyboard_ready or str(keyboard_chat_id) != str(chat_id)
+                or keyboard_mode != 'inline'):
+            telegram_api(token, 'sendMessage', {
+                'chat_id': chat_id,
+                'text': '서65 조회 버튼을 인라인 방식으로 전환합니다.',
+                'reply_markup': {'remove_keyboard': True}
+            })
+            telegram_send(token, chat_id,
+                          '🚢 서65 배정 조회 버튼입니다. 아래 버튼을 눌러 조회하세요.\n'
+                          '※ 조회 결과는 다음 자동 실행 때(최대 약 5분) 도착합니다.',
+                          buttons=True)
+            keyboard_ready, keyboard_chat_id, keyboard_mode = True, str(chat_id), 'inline'
+            save_state(current_by_day, offset, keyboard_ready, keyboard_chat_id, keyboard_mode)
+    elif not keyboard_ready:
+        telegram_send(token, chat_id,
+                      '🚢 서41 배정 조회 버튼이 준비됐습니다. 아래 버튼을 눌러 조회하세요.',
+                      buttons=True)
         keyboard_ready = True
         save_state(current_by_day, offset, keyboard_ready)
     new_offset = process_commands(token, chat_id, current_by_day, now, offset)
-    save_state(current_by_day, new_offset, keyboard_ready)
+    save_state(current_by_day, new_offset, keyboard_ready, keyboard_chat_id, keyboard_mode)
 
 
 if __name__ == '__main__':
