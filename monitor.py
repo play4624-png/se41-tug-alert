@@ -19,19 +19,20 @@ FIELDS = ['선박명', '총톤수', '흘수', '요청일시', '시작점', '종�
 CHANGE_FIELDS = ['요청일시', '시작점', '종료점', 'Work', 'B', 'B/T']
 TUG = re.compile(r'(?<![가-힣A-Za-z0-9])서\s*41(?![가-힣A-Za-z0-9])')
 WORK_BOLD = re.compile(r'(?<![A-Za-z0-9])(?:DE|BE|SFT|WAT|ESC)(?![A-Za-z0-9])', re.IGNORECASE)
-BUTTONS = {'se65_today': 'today', 'se65_tomorrow': 'tomorrow', 'se65_all': 'all'}
+BUTTONS = {'se41_today': 'today', 'se41_tomorrow': 'tomorrow', 'se41_all': 'all'}
 COMMANDS = {
     '📋 오늘배정': 'today', '📅 내일배정': 'tomorrow', '📑 전체배정': 'all',
-    '/오늘배정': 'today', '/현재배정': 'today', '/내일배정': 'tomorrow', '/전체배정': 'all'
+    '/오늘배정': 'today', '/현재배정': 'today', '/내일배정': 'tomorrow', '/전체배정': 'all',
+    '/시작': 'start', '/start': 'start', '/버튼': 'start'
 }
 INLINE_KEYBOARD = {'inline_keyboard': [[
-    {'text': '📋 오늘배정', 'callback_data': 'se65_today'},
-    {'text': '📅 내일배정', 'callback_data': 'se65_tomorrow'},
-    {'text': '📑 전체배정', 'callback_data': 'se65_all'}
+    {'text': '📋 오늘배정', 'callback_data': 'se41_today'},
+    {'text': '📅 내일배정', 'callback_data': 'se41_tomorrow'},
+    {'text': '📑 전체배정', 'callback_data': 'se41_all'}
 ]]}
 KEYBOARD = {
     'keyboard': [[{'text': '📋 오늘배정'}, {'text': '📅 내일배정'}, {'text': '📑 전체배정'}]],
-    'resize_keyboard': True, 'is_persistent': True
+    'resize_keyboard': True, 'is_persistent': True, 'one_time_keyboard': False
 }
 
 
@@ -296,6 +297,7 @@ def command_reply(mode, current_by_day, now):
 
 def process_commands(token, chat_id, current_by_day, now, offset):
     updates = get_updates(token, offset)
+    print(f'텔레그램 수신 업데이트: {len(updates)}건')
     new_offset = offset
     replied_modes = set()
     new_members_joined = False
@@ -314,7 +316,7 @@ def process_commands(token, chat_id, current_by_day, now, offset):
                     print(f'버튼 응답 확인 지연 (조회 결과는 계속 전송): {exc}')
                 if mode not in replied_modes:
                     for reply in command_reply(mode, current_by_day, now):
-                        telegram_send(token, chat_id, reply)
+                        telegram_send(token, chat_id, reply, buttons=not INLINE_MODE)
                     replied_modes.add(mode)
                     print(f'인라인 버튼 처리: {mode}')
                 else:
@@ -330,9 +332,14 @@ def process_commands(token, chat_id, current_by_day, now, offset):
                 new_members_joined = True
             if str(message_chat) == str(chat_id) and command in COMMANDS:
                 mode = COMMANDS[command]
-                if not INLINE_MODE or mode not in replied_modes:
+                if mode == 'start':
+                    telegram_send(token, chat_id,
+                                  '🚢 서41 배정 조회 버튼이 준비됐습니다. 아래 버튼을 눌러 조회하세요.',
+                                  buttons=True)
+                    print('시작 명령어 처리 완료: 일반 키보드 재전송')
+                elif not INLINE_MODE or mode not in replied_modes:
                     for reply in command_reply(mode, current_by_day, now):
-                        telegram_send(token, chat_id, reply)
+                        telegram_send(token, chat_id, reply, buttons=not INLINE_MODE)
                     replied_modes.add(mode)
                     print(f'텔레그램 명령어 처리: {command}')
                 else:
@@ -340,7 +347,7 @@ def process_commands(token, chat_id, current_by_day, now, offset):
         new_offset = update_id + 1
     if INLINE_MODE and new_members_joined:
         telegram_send(token, chat_id,
-                      '🚢 서65 배정 조회 안내\n'
+                      '🚢 서41 배정 조회 안내\n'
                       '새로 입장하신 분은 아래 버튼으로 오늘·내일 배정을 확인하세요.\n'
                       '※ 조회 결과는 다음 자동 실행 때 도착할 수 있습니다.', buttons=True)
         print('신규 참여자 입장: 인라인 조회 버튼 안내 1회 전송')
@@ -400,11 +407,11 @@ def main():
                 or keyboard_mode != 'inline'):
             telegram_api(token, 'sendMessage', {
                 'chat_id': chat_id,
-                'text': '서65 조회 버튼을 인라인 방식으로 전환합니다.',
+                'text': '서41 조회 버튼을 인라인 방식으로 전환합니다.',
                 'reply_markup': {'remove_keyboard': True}
             })
             telegram_send(token, chat_id,
-                          '🚢 서65 배정 조회 버튼입니다. 아래 버튼을 눌러 조회하세요.\n'
+                          '🚢 서41 배정 조회 버튼입니다. 아래 버튼을 눌러 조회하세요.\n'
                           '※ 조회 결과는 다음 자동 실행 때(최대 약 5분) 도착합니다.',
                           buttons=True)
             keyboard_ready, keyboard_chat_id, keyboard_mode = True, str(chat_id), 'inline'
